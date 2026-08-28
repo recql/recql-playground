@@ -103,16 +103,58 @@ def train_als_factors(
     if not users or not items:
         return {}, {}
 
+    try:
+        import numpy as np
+
+        u_idx = {u: i for i, u in enumerate(users)}
+        i_idx = {i: j for j, i in enumerate(items)}
+
+        rng = np.random.RandomState(42)
+        U = rng.randn(len(users), dims).astype(np.float32) * 0.1
+        V = rng.randn(len(items), dims).astype(np.float32) * 0.1
+
+        by_user: dict[int, list[tuple[int, float]]] = defaultdict(list)
+        by_item: dict[int, list[tuple[int, float]]] = defaultdict(list)
+        for u, i, r in interactions:
+            by_user[u_idx[u]].append((i_idx[i], float(r)))
+            by_item[i_idx[i]].append((u_idx[u], float(r)))
+
+        I_reg = np.eye(dims, dtype=np.float32) * float(reg)
+        for _ in range(steps):
+            for u, neigh in by_user.items():
+                if not neigh:
+                    continue
+                v_sub = V[[j for j, _ in neigh]]
+                r_sub = np.array([r for _, r in neigh], dtype=np.float32)
+                xtx = v_sub.T @ v_sub + I_reg
+                xty = v_sub.T @ r_sub
+                U[u] = np.linalg.solve(xtx, xty)
+            for i, neigh in by_item.items():
+                if not neigh:
+                    continue
+                u_sub = U[[j for j, _ in neigh]]
+                r_sub = np.array([r for _, r in neigh], dtype=np.float32)
+                xtx = u_sub.T @ u_sub + I_reg
+                xty = u_sub.T @ r_sub
+                V[i] = np.linalg.solve(xtx, xty)
+
+        return (
+            {u: [float(x) for x in U[u_idx[u]]] for u in users},
+            {i: [float(x) for x in V[i_idx[i]]] for i in items},
+        )
+    except ImportError:
+        pass
+
     def zeros() -> list[float]:
         return [0.0] * dims
 
     U = {u: fake_embedding(f"u:{u}", dims=dims) for u in users}
     V = {i: fake_embedding(f"i:{i}", dims=dims) for i in items}
-    by_user: dict[str, list[tuple[str, float]]] = defaultdict(list)
-    by_item: dict[str, list[tuple[str, float]]] = defaultdict(list)
+    by_user_py: dict[str, list[tuple[str, float]]] = defaultdict(list)
+    by_item_py: dict[str, list[tuple[str, float]]] = defaultdict(list)
     for u, i, r in interactions:
-        by_user[u].append((i, r))
-        by_item[i].append((u, r))
+        by_user_py[u].append((i, r))
+        by_item_py[i].append((u, r))
 
     def solve(target, neighbors, other):
         for key, neigh in neighbors.items():
@@ -129,8 +171,8 @@ def train_als_factors(
             target[key] = _solve(xtx, xty)
 
     for _ in range(steps):
-        solve(U, by_user, V)
-        solve(V, by_item, U)
+        solve(U, by_user_py, V)
+        solve(V, by_item_py, U)
     return U, V
 
 
@@ -268,9 +310,9 @@ def build_demo_catalog(
     if max_ratings is None:
         max_ratings = _env_int("RECQL_MOVIELENS_MAX_RATINGS", None)
     if als_max_users is None:
-        als_max_users = _env_int("RECQL_ALS_MAX_USERS", 120)
+        als_max_users = _env_int("RECQL_ALS_MAX_USERS", None)
     if als_max_items is None:
-        als_max_items = _env_int("RECQL_ALS_MAX_ITEMS", 400)
+        als_max_items = _env_int("RECQL_ALS_MAX_ITEMS", None)
     if als_steps is None:
         als_steps = _env_int("RECQL_ALS_STEPS", 8) or 8
 

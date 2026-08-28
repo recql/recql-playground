@@ -2,6 +2,7 @@
 """Run an examples/ use-case with MovieLens default params.
 
   python -m examples.run_example search/hybrid
+  python -m examples.run_example feeds/for_you --backend mssql
   python -m examples.run_example feeds/for_you --seed 0
   python -m examples.run_example --list
 
@@ -28,6 +29,22 @@ _EXAMPLES = Path(__file__).resolve().parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+_CONTAINER_DSNS = {
+    "postgres": "postgres://recql:recql@postgres:5432/recql",
+    "oracle": "oracle://recql:RecqlPass1@oracle:1521/FREEPDB1",
+    "mariadb": "mariadb://recql:recql@mariadb:3306/recql",
+    "mongodb": "mongodb://mongodb:27017/recql?directConnection=true",
+    "mssql": "mssql://sa:RecqlTest1234!@mssql:1433/recql",
+}
+
+_LOCAL_DSNS = {
+    "postgres": os.environ.get("RECQL_PG_DSN", "postgres://recql:recql@127.0.0.1:55435/recql"),
+    "oracle": os.environ.get("RECQL_ORACLE_DSN", "oracle://recql:RecqlPass1@127.0.0.1:1521/FREEPDB1"),
+    "mariadb": os.environ.get("RECQL_MARIADB_DSN", "mariadb://recql:recql@127.0.0.1:3306/recql"),
+    "mongodb": os.environ.get("RECQL_MONGODB_DSN", "mongodb://127.0.0.1:27018/recql?directConnection=true"),
+    "mssql": os.environ.get("RECQL_MSSQL_DSN", "mssql://sa:RecqlTest1234!@127.0.0.1:14333/recql"),
+}
+
 
 def _in_container() -> bool:
     if os.environ.get("RECQL_IN_CONTAINER") in ("1", "true", "yes"):
@@ -35,30 +52,44 @@ def _in_container() -> bool:
     return Path("/app/recql").is_dir() and Path("/app/docker/app/entrypoint.sh").is_file()
 
 
+def _cli_module() -> str:
+    try:
+        import recql_cli
+        return "recql_cli"
+    except ImportError:
+        return "recql.cli"
+
+
 def _seed_if_needed(args: argparse.Namespace, *, encode: str, backend: str) -> None:
-    seed = os.environ.get("RECQL_SEED", args.seed)
+    seed = os.environ.get("RECQL_SEED", getattr(args, "seed", "auto"))
+    if str(seed).lower() in ("0", "false", "no"):
+        return
     st = encode in ("st", "sentence_transformers", "hf", "minilm")
     encode_backend = "sentence_transformers" if st else "fake"
     dims = "384" if st else os.environ.get("RECQL_DIMS", "8")
     dsn = os.environ.get(
         "RECQL_DATABASE",
-        "postgres://recql:recql@postgres:5432/recql"
-        if backend == "postgres"
-        else "oracle://recql:RecqlPass1@oracle:1521/FREEPDB1",
+        _CONTAINER_DSNS.get(backend, _CONTAINER_DSNS["postgres"]),
     )
     import subprocess
 
-    if str(seed) not in ("1", "true", "yes") and backend == "postgres":
+    if str(seed).lower() != "force":
         chk = subprocess.run(
-            [sys.executable, "-m", "examples.generator.check_dims"],
-            env={**os.environ, "RECQL_DATABASE": dsn, "RECQL_DIMS": dims},
+            [
+                sys.executable,
+                "-m",
+                "examples.generator.check_seeded",
+                "--backend",
+                backend,
+                "--database",
+                dsn,
+                "--dims",
+                dims,
+            ],
+            capture_output=True,
         )
-        if chk.returncode != 0:
-            print("auto re-seeding to fix embedding dimension mismatch …", flush=True)
-            seed = "1"
-
-    if str(seed) not in ("1", "true", "yes"):
-        return
+        if chk.returncode == 0:
+            return
 
     print(f"seeding {backend} encode={encode_backend} dims={dims} …", flush=True)
     subprocess.run(
@@ -87,7 +118,6 @@ def _find_query(name: str) -> Path:
         _EXAMPLES / f"{name}.yaml",
         _EXAMPLES / f"{name}.sql",
     ]
-    # reranking/model → examples/reranking/model.sql
     if "/" in name:
         parent, leaf = name.rsplit("/", 1)
         candidates.extend(
@@ -176,7 +206,11 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("example", nargs="?", help="e.g. search/hybrid, reranking/model")
     p.add_argument("--list", action="store_true")
-    p.add_argument("--backend", default="postgres", choices=("postgres", "oracle"))
+    p.add_argument(
+        "--backend",
+        default=os.environ.get("RECQL_BACKEND", "postgres"),
+        choices=("postgres", "oracle", "mariadb", "mongodb", "mssql"),
+    )
     p.add_argument("--encode", default=os.environ.get("RECQL_ENCODE", "st"))
     p.add_argument("--seed", default=os.environ.get("RECQL_SEED", "0"))
     p.add_argument("--pagination-key", default=None)
@@ -218,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
     encode = args.encode
     st = encode in ("st", "sentence_transformers", "hf", "minilm")
     eng_name = "engine.st.yaml" if st else "engine.yaml"
-    backend_dir = "oracle" if args.backend == "oracle" else "postgres"
+    backend_dir = args.backend
     container_engine = f"/app/examples/generator/{backend_dir}/{eng_name}"
     container_query = f"/app/{query_path.relative_to(_ROOT)}"
 
@@ -233,13 +267,11 @@ def main(argv: list[str] | None = None) -> int:
         cmd = [
             sys.executable,
             "-m",
-            "recql.cli",
+            _cli_module(),
             "--database",
             os.environ.get(
                 "RECQL_DATABASE",
-                "postgres://recql:recql@postgres:5432/recql"
-                if args.backend == "postgres"
-                else "oracle://recql:RecqlPass1@oracle:1521/FREEPDB1",
+                _CONTAINER_DSNS.get(args.backend, _CONTAINER_DSNS["postgres"]),
             ),
             "--backend",
             args.backend,
@@ -261,17 +293,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.local or os.environ.get("RECQL_USE_DOCKER") in ("0", "false", "no"):
         dsn = (
-            os.environ.get("RECQL_PG_DSN")
-            or "postgres://recql:recql@127.0.0.1:55435/recql"
-            if args.backend == "postgres"
-            else os.environ.get("RECQL_ORACLE_DSN")
-            or "oracle://recql:RecqlPass1@127.0.0.1:1521/FREEPDB1"
+            os.environ.get("RECQL_DATABASE")
+            or _LOCAL_DSNS.get(args.backend, _LOCAL_DSNS["postgres"])
         )
         engine = str(_EXAMPLES / "generator" / backend_dir / eng_name)
         cmd = [
             sys.executable,
             "-m",
-            "recql.cli",
+            _cli_module(),
             "--database",
             dsn,
             "--backend",
@@ -283,7 +312,7 @@ def main(argv: list[str] | None = None) -> int:
             *_cli_param_args(params),
         ]
     else:
-        service = "app-postgres" if args.backend == "postgres" else "app-oracle"
+        service = f"app-{args.backend}"
         cmd = [
             "docker",
             "compose",

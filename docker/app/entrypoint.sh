@@ -1,15 +1,27 @@
 #!/usr/bin/env bash
-# RecQL container entrypoint: wait for DB → optional seed → CLI.
+# RecQL container entrypoint: wait for DB → check seed status → Menu / CLI.
 set -euo pipefail
 
 BACKEND="${RECQL_BACKEND:-postgres}"
-SEED="${RECQL_SEED:-1}"
+SEED="${RECQL_SEED:-auto}"
 ENCODE="${RECQL_ENCODE:-st}"
+
+# Install mounted deps if present
+if [[ -d "/deps/core" ]]; then
+  for pack in core cli postgres oracle mariadb mongodb mssql; do
+    if [[ -f "/deps/${pack}/pyproject.toml" ]]; then
+      rm -rf "/tmp/pack_${pack}"
+      mkdir -p "/tmp/pack_${pack}"
+      cp -a "/deps/${pack}"/. "/tmp/pack_${pack}"/ 2>/dev/null || true
+      pip install -q --no-deps -e "/tmp/pack_${pack}" 2>/dev/null || true
+    fi
+  done
+fi
+pip install -q --no-deps -e /app 2>/dev/null || true
 
 case "$ENCODE" in
   st|sentence_transformers|hf|minilm)
     ENCODE_BACKEND=sentence_transformers
-    # MiniLM is always 384 — ignore stale RECQL_DIMS=8 from old .env files
     if [[ -n "${RECQL_DIMS:-}" && "${RECQL_DIMS}" != "384" ]]; then
       echo "note: RECQL_ENCODE=st forces dims=384 (ignoring RECQL_DIMS=${RECQL_DIMS})" >&2
     fi
@@ -46,14 +58,24 @@ case "$BACKEND" in
     ENGINE="/app/examples/generator/mariadb/engine${ENGINE_SUFFIX}.yaml"
     CLI_BACKEND_ARGS=(--backend mariadb)
     ;;
+  mongodb|mongo)
+    BACKEND=mongodb
+    DATABASE="${RECQL_DATABASE:-${RECQL_MONGODB_DSN:-mongodb://mongodb:27017/recql?directConnection=true}}"
+    ENGINE="/app/examples/generator/mongodb/engine${ENGINE_SUFFIX}.yaml"
+    CLI_BACKEND_ARGS=(--backend mongodb)
+    ;;
+  mssql|sqlserver|tsql)
+    BACKEND=mssql
+    DATABASE="${RECQL_DATABASE:-${RECQL_MSSQL_DSN:-mssql://sa:RecqlTest1234!@mssql:1433/recql}}"
+    ENGINE="/app/examples/generator/mssql/engine${ENGINE_SUFFIX}.yaml"
+    CLI_BACKEND_ARGS=(--backend mssql)
+    ;;
   *)
-    echo "unknown RECQL_BACKEND=$BACKEND (use postgres|oracle|mariadb)" >&2
+    echo "unknown RECQL_BACKEND=$BACKEND (use postgres|oracle|mariadb|mongodb|mssql)" >&2
     exit 2
     ;;
 esac
 
-# Seed + query must share the same engine (dims + encode_backend).
-# Ignore a pinned RECQL_ENGINE that disagrees with RECQL_ENCODE (compose footgun).
 if [[ -n "${RECQL_ENGINE:-}" && "${RECQL_ENGINE}" != "$ENGINE" ]]; then
   echo "note: ignoring RECQL_ENGINE=${RECQL_ENGINE} (using ${ENGINE} for encode=${ENCODE})" >&2
 fi
@@ -124,6 +146,52 @@ asyncio.run(main())
 PY
 }
 
+wait_for_mongodb() {
+  python - <<'PY'
+import asyncio, os, sys
+dsn = os.environ.get("RECQL_DATABASE") or os.environ.get("RECQL_MONGODB_DSN") or "mongodb://mongodb:27017/recql?directConnection=true"
+async def main():
+    from recql_mongodb.db import create_client
+    for i in range(60):
+        try:
+            client, db = await create_client(dsn)
+            await db.command("ping")
+            client.close()
+            print(f"mongodb ready ({dsn})", flush=True)
+            return
+        except Exception as e:
+            print(f"waiting for mongodb… ({i+1}/60) {e}", flush=True)
+            await asyncio.sleep(2)
+    sys.exit(1)
+asyncio.run(main())
+PY
+}
+
+wait_for_mssql() {
+  python - <<'PY'
+import asyncio, os, sys
+dsn = os.environ.get("RECQL_DATABASE") or os.environ.get("RECQL_MSSQL_DSN") or "mssql://sa:RecqlTest1234!@mssql:1433/recql"
+async def main():
+    from recql_mssql.db import create_pool
+    for i in range(60):
+        try:
+            pool = await create_pool(dsn, min_size=1, max_size=1)
+            conn = await pool.acquire()
+            cursor = conn.cursor()
+            cursor.execute("SELECT 1")
+            cursor.close()
+            await pool.release(conn)
+            await pool.close()
+            print(f"mssql ready ({dsn.split('@')[-1]})", flush=True)
+            return
+        except Exception as e:
+            print(f"waiting for mssql… ({i+1}/60) {e}", flush=True)
+            await asyncio.sleep(2)
+    sys.exit(1)
+asyncio.run(main())
+PY
+}
+
 export RECQL_DATABASE="$DATABASE"
 export RECQL_ENGINE="$ENGINE"
 export RECQL_ENCODE="$ENCODE"
@@ -133,42 +201,49 @@ if [[ "$BACKEND" == "postgres" ]]; then
   wait_for_postgres
 elif [[ "$BACKEND" == "oracle" ]]; then
   wait_for_oracle
-else
+elif [[ "$BACKEND" == "mariadb" ]]; then
   wait_for_mariadb
+elif [[ "$BACKEND" == "mongodb" ]]; then
+  wait_for_mongodb
+elif [[ "$BACKEND" == "mssql" ]]; then
+  wait_for_mssql
 fi
 
-# When SEED=0, still re-seed if DB embedding dims disagree with engine (8 vs 384).
-NEED_SEED=0
-if [[ "$SEED" != "1" && "$SEED" != "true" && "$SEED" != "yes" ]]; then
-  if [[ "$BACKEND" == "postgres" ]]; then
-    if ! python -m examples.generator.check_dims; then
-      echo "auto re-seeding to fix embedding dimension mismatch …" >&2
-      NEED_SEED=1
-    fi
-  fi
+# Check if DB is already seeded
+ALREADY_SEEDED=0
+if python -m examples.generator.check_seeded --backend "$BACKEND" --database "$DATABASE" --dims "$DIMS" >/dev/null 2>&1; then
+  ALREADY_SEEDED=1
 fi
 
-if [[ "$SEED" == "1" || "$SEED" == "true" || "$SEED" == "yes" || "$NEED_SEED" == "1" ]]; then
-  echo "seeding $BACKEND encode=$ENCODE_BACKEND dims=$DIMS engine=$ENGINE …"
+if [[ "$SEED" == "force" || ( "$ALREADY_SEEDED" == "0" && "$SEED" != "0" && "$SEED" != "false" && "$SEED" != "no" ) ]]; then
+  echo "seeding $BACKEND (encode=$ENCODE_BACKEND, dims=$DIMS) …"
   python -m examples.generator.run \
     --backend "$BACKEND" \
     --database "$DATABASE" \
     --encode-backend "$ENCODE_BACKEND" \
     --dims "$DIMS"
+else
+  echo "database $BACKEND is already seeded (${DIMS}-d) — skipping seed"
 fi
 
-echo "cli encode=$ENCODE_BACKEND dims=$DIMS engine=$ENGINE"
-
-# No args → REPL; otherwise forward to recql.cli
-if [[ "$#" -eq 0 ]]; then
-  exec python -m recql.cli \
-    --database "$DATABASE" \
-    "${CLI_BACKEND_ARGS[@]}" \
-    --engine "$ENGINE" \
-    --repl
+CLI_MOD="recql_cli"
+if ! python -c "import recql_cli" >/dev/null 2>&1; then
+  if python -c "import recql.cli" >/dev/null 2>&1; then
+    CLI_MOD="recql.cli"
+  fi
 fi
 
-exec python -m recql.cli \
+# If no args or --menu, launch menu UI
+if [[ "$#" -eq 0 || "${1:-}" == "--menu" ]]; then
+  exec python -m examples.menu
+fi
+
+# If direct shell command given, execute directly
+if [[ "${1:-}" == "python" || "${1:-}" == "bash" || "${1:-}" == "sh" || "${1:-}" == "pytest" || "${1:-}" == "recql" ]]; then
+  exec "$@"
+fi
+
+exec python -m "$CLI_MOD" \
   --database "$DATABASE" \
   "${CLI_BACKEND_ARGS[@]}" \
   --engine "$ENGINE" \

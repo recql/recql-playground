@@ -1,11 +1,11 @@
 -- Boosted reorder: interleave ALS results with Comedy titles (promo bag).
--- Uses item attrs genres (MovieLens); Postgres JSONB containment.
+-- Uses item attrs genre (MovieLens).
 -- Example: make example E=boosted
 SELECT score(expression='click_through_rate', input_user_id=$user_id) AS s,
        boosted(
          score=s,
          retriever=filter(
-           where='e.attrs @> ''{"genres":["Comedy"]}''::jsonb',
+           where='JSON_VALUE(e.attrs, ''$.genre'') = ''Comedy''',
            limit=40,
            name='comedies'
          ),

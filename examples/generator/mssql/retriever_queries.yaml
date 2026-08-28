@@ -1,0 +1,25 @@
+# Microsoft SQL Server 2025 retriever queries for the MovieLens demo stack.
+
+index:
+  embedding_stores:
+    content_embedding:
+      item:
+        table: text_embeddings
+        name_column: embedding_name
+        entity_id_column: entity_id
+        vector_column: embedding
+    title_embedding:
+      item:
+        table: text_embeddings
+        name_column: embedding_name
+        entity_id_column: entity_id
+        vector_column: embedding
+    als:
+      user:
+        table: als_user_embeddings
+        entity_id_column: user_id
+        vector_column: embedding
+      item:
+        table: als_item_embeddings
+        entity_id_column: item_id
+        vector_column: embedding
