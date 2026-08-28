@@ -1,4 +1,4 @@
-.DEFAULT_GOAL := menu
+.DEFAULT_GOAL := help
 
 PYTHON ?= $(shell command -v python3 2>/dev/null || command -v python 2>/dev/null || echo python3)
 COMPOSE ?= docker compose
