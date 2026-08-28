@@ -1,0 +1,13 @@
+# Similar users (u2u) — MovieLens user 55.
+# Example: make example E=similar_users
+type: rank
+from: user
+retrieve:
+  - type: similarity
+    embedding_ref: als
+    query_encoder:
+      type: precomputed_user
+      input_user_id: $parameter.user_id
+    name: similar_users
+    limit: 50
+limit: 20

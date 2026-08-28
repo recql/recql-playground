@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "recql-playground"
+version = "0.1.0"
+description = "RecQL demos, MovieLens seed generators, and docker stacks"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+# Seed/generators only need core. CLI and DB packs are optional extras —
+# they are not on PyPI yet and must be installed from sibling checkouts.
+dependencies = [
+  "recql>=0.1.0",
+]
+
+[project.optional-dependencies]
+cli = ["recql-cli>=0.1.0"]
+postgres = ["recql-postgres>=0.1.0"]
+mariadb = ["recql-mariadb>=0.1.0"]
+oracle = ["recql-oracle>=0.1.0"]
+all-backends = [
+  "recql-postgres>=0.1.0",
+  "recql-mariadb>=0.1.0",
+  "recql-oracle>=0.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/recql/recql-playground"
+Repository = "https://github.com/recql/recql-playground"
+
+[project.scripts]
+recql-seed = "examples.generator.run:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["examples*"]

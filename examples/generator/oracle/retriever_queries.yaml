@@ -1,0 +1,127 @@
+# Explicit Oracle retriever SQL for the MovieLens demo stack.
+# Included by examples/generator/oracle/engine.yaml and engine.st.yaml.
+#
+# Prefer a non-slim gvenzl image (compose default) so CTXSYS/CONTAINS is available.
+# If CTXSYS is missing, the plugin falls back to lexical_like_fallback.
+
+plugins:
+  oracle:
+    queries:
+      entity_list: |
+        SELECT {item_select}
+        FROM {item_from} e
+
+      entity_filter: |
+        SELECT {item_select}
+        FROM {item_from} e
+        WHERE ({where})
+        FETCH FIRST $limit ROWS ONLY
+
+      entity_column_order: |
+        SELECT {item_select}
+        FROM {item_from} e
+        WHERE ({where})
+        ORDER BY {order_by}
+        FETCH FIRST $limit ROWS ONLY
+
+      entity_column_order_open: |
+        SELECT {item_select}
+        FROM {item_from} e
+        ORDER BY {order_by}
+        FETCH FIRST $limit ROWS ONLY
+
+      entity_by_ids: |
+        SELECT {item_select}
+        FROM {item_from} e
+        WHERE e.{id_column} IN ({id_in_list})
+        ORDER BY CASE e.{id_column} {id_order_case} END
+
+      interaction_items_for_user: |
+        SELECT {item_id_column} AS item_id
+        FROM {interaction_from}
+        WHERE {user_id_column} = $entity_id
+
+      personal_filter_ids: |
+        SELECT {select_column} AS ban_id
+        FROM {filter_from}
+        WHERE {where_column} = $entity_id
+
+index:
+  lexical_search:
+    queries:
+      lexical_oracle_text: |
+        SELECT {id_column} AS entity_id, attrs, SCORE({text_score_label}) AS score
+        FROM {item_from}
+        WHERE CONTAINS({search_text_column}, $query_text, {text_score_label}) > 0
+        ORDER BY score DESC
+        FETCH FIRST $limit ROWS ONLY
+
+      lexical_like_fallback: |
+        SELECT {id_column} AS entity_id, attrs, 0.1 AS score
+        FROM {item_from}
+        WHERE UPPER(DBMS_LOB.SUBSTR({search_text_column}, 4000, 1)) LIKE UPPER($query_text)
+        ORDER BY score DESC
+        FETCH FIRST $limit ROWS ONLY
+
+  embedding_stores:
+    content_embedding:
+      item:
+        table: text_embeddings
+        name_column: embedding_name
+        entity_id_column: entity_id
+        vector_column: embedding
+        queries:
+          embedding_vector_search: |
+            SELECT emb.{entity_id_column} AS entity_id, i.attrs,
+                   (1 - VECTOR_DISTANCE(emb.{vector_column}, $query_vector, {vector_distance_metric})) AS score
+            FROM {emb_from} emb
+            JOIN {item_from} i ON i.{id_column} = emb.{entity_id_column}
+            WHERE {emb_filter}
+            ORDER BY score DESC
+            FETCH FIRST $limit ROWS ONLY
+
+    title_embedding:
+      item:
+        table: text_embeddings
+        name_column: embedding_name
+        entity_id_column: entity_id
+        vector_column: embedding
+        queries:
+          embedding_vector_search: |
+            SELECT emb.{entity_id_column} AS entity_id, i.attrs,
+                   (1 - VECTOR_DISTANCE(emb.{vector_column}, $query_vector, {vector_distance_metric})) AS score
+            FROM {emb_from} emb
+            JOIN {item_from} i ON i.{id_column} = emb.{entity_id_column}
+            WHERE {emb_filter}
+            ORDER BY score DESC
+            FETCH FIRST $limit ROWS ONLY
+
+    als:
+      user:
+        table: als_user_embeddings
+        entity_id_column: user_id
+        vector_column: embedding
+        queries:
+          embedding_lookup: |
+            SELECT emb.{vector_column} AS embedding
+            FROM {emb_from} emb
+            WHERE emb.{entity_id_column} = $entity_id
+
+      item:
+        table: als_item_embeddings
+        entity_id_column: item_id
+        vector_column: embedding
+        queries:
+          embedding_lookup: |
+            SELECT emb.{vector_column} AS embedding
+            FROM {emb_from} emb
+            WHERE emb.{entity_id_column} = $entity_id
+
+          embedding_similarity_search: |
+            SELECT emb.{entity_id_column} AS entity_id, i.attrs,
+                   (1 - VECTOR_DISTANCE(emb.{vector_column}, $query_vector, {vector_distance_metric})) AS score
+            FROM {emb_from} emb
+            JOIN {item_from} i ON i.{id_column} = emb.{entity_id_column}
+            WHERE TRUE
+            ORDER BY score DESC
+            FETCH FIRST $limit ROWS ONLY

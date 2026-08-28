@@ -1,0 +1,20 @@
+# Hybrid lexical + semantic search over MovieLens.
+# Example: make example E=search/hybrid
+type: rank
+from: item
+retrieve:
+  - type: text_search
+    input_text_query: $parameter.query_text
+    mode:
+      type: vector
+      text_embedding_ref: content_embedding
+    name: vector_search
+    limit: 50
+  - type: text_search
+    input_text_query: $parameter.query_text
+    mode:
+      type: lexical
+      fuzziness_edit_distance: 2
+    name: lexical_search
+    limit: 50
+limit: 20

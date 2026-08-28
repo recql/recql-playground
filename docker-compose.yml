@@ -1,0 +1,155 @@
+# Demo stack: databases + RecQL app image (generator seed + CLI).
+# Prefer Make: `make help` · `make demo` · `make repl` · `make up-oracle`
+#
+# Oracle uses gvenzl/oracle-free (Docker Hub; no OCR login). First boot is slow;
+# `make reset-oracle` if you previously used the official registry image.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg18
+    container_name: recql-postgres
+    environment:
+      POSTGRES_USER: recql
+      POSTGRES_PASSWORD: recql
+      POSTGRES_DB: recql
+    ports:
+      - "55435:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U recql -d recql"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - recql_pg_data:/var/lib/postgresql/data
+
+  oracle:
+    # Non-slim includes Oracle Text (CTXSYS/CONTAINS). Slim lacks it; override with
+    # ORACLE_IMAGE=gvenzl/oracle-free:23-slim-faststart only for lightweight trials.
+    image: ${ORACLE_IMAGE:-gvenzl/oracle-free:23-faststart}
+    container_name: recql-oracle
+    hostname: recql-oracle
+    ports:
+      - "${ORACLE_PORT:-1521}:1521"
+    environment:
+      ORACLE_PASSWORD: ${ORACLE_PWD:-RecqlPass1}
+      APP_USER: recql
+      APP_USER_PASSWORD: ${ORACLE_PWD:-RecqlPass1}
+    shm_size: ${ORACLE_SHM_SIZE:-1gb}
+    volumes:
+      - recql_oracle_data:/opt/oracle/oradata
+      - ./docker/oracle/setup:/container-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
+
+  mariadb:
+    # MariaDB 11.7+ ships native VECTOR + FULLTEXT
+    image: ${MARIADB_IMAGE:-mariadb:11.7}
+    container_name: recql-mariadb
+    ports:
+      - "${MARIADB_PORT:-3306}:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MARIADB_ROOT_PWD:-RecqlRoot1}
+      MYSQL_DATABASE: recql
+      MYSQL_USER: recql
+      MYSQL_PASSWORD: ${MARIADB_PWD:-recql}
+    volumes:
+      - recql_mariadb_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  # RecQL library + examples: seeds demo catalog, then runs CLI / REPL
+  app-postgres:
+    build: .
+    image: recql:local
+    container_name: recql-app-postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      RECQL_BACKEND: postgres
+      RECQL_DATABASE: postgres://recql:recql@postgres:5432/recql
+      # Engine YAML is chosen by entrypoint from RECQL_ENCODE (engine.yaml vs engine.st.yaml)
+      RECQL_SEED: ${RECQL_SEED:-1}
+      RECQL_ENCODE: ${RECQL_ENCODE:-st}
+      RECQL_DIMS: ${RECQL_DIMS:-384}
+      # Persist MiniLM / HF weights across `compose run` (ephemeral containers)
+      HF_HOME: /cache/huggingface
+      HUGGINGFACE_HUB_CACHE: /cache/huggingface/hub
+      TRANSFORMERS_CACHE: /cache/huggingface/transformers
+      SENTENCE_TRANSFORMERS_HOME: /cache/huggingface/sentence-transformers
+    volumes:
+      # Dev: live local tree overrides image COPY (editable install → /app/recql)
+      - ./recql:/app/recql
+      - ./examples:/app/examples
+      - ./docker/app/entrypoint.sh:/app/docker/app/entrypoint.sh:ro
+      - recql_hf_cache:/cache/huggingface
+    profiles: ["app", "postgres-app", "full"]
+    stdin_open: true
+    tty: true
+
+  app-oracle:
+    build: .
+    image: recql:local
+    container_name: recql-app-oracle
+    depends_on:
+      oracle:
+        condition: service_healthy
+    environment:
+      RECQL_BACKEND: oracle
+      RECQL_DATABASE: oracle://recql:${ORACLE_PWD:-RecqlPass1}@oracle:1521/FREEPDB1
+      RECQL_SEED: ${RECQL_SEED:-1}
+      RECQL_ENCODE: ${RECQL_ENCODE:-st}
+      RECQL_DIMS: ${RECQL_DIMS:-384}
+      HF_HOME: /cache/huggingface
+      HUGGINGFACE_HUB_CACHE: /cache/huggingface/hub
+      TRANSFORMERS_CACHE: /cache/huggingface/transformers
+      SENTENCE_TRANSFORMERS_HOME: /cache/huggingface/sentence-transformers
+    volumes:
+      - ./recql:/app/recql
+      - ./examples:/app/examples
+      - ./docker/app/entrypoint.sh:/app/docker/app/entrypoint.sh:ro
+      - recql_hf_cache:/cache/huggingface
+    profiles: ["app", "oracle-app", "full"]
+    stdin_open: true
+    tty: true
+
+  app-mariadb:
+    build: .
+    image: recql:local
+    container_name: recql-app-mariadb
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      RECQL_BACKEND: mariadb
+      RECQL_DATABASE: mariadb://recql:${MARIADB_PWD:-recql}@mariadb:3306/recql
+      RECQL_SEED: ${RECQL_SEED:-1}
+      RECQL_ENCODE: ${RECQL_ENCODE:-st}
+      RECQL_DIMS: ${RECQL_DIMS:-384}
+      HF_HOME: /cache/huggingface
+      HUGGINGFACE_HUB_CACHE: /cache/huggingface/hub
+      TRANSFORMERS_CACHE: /cache/huggingface/transformers
+      SENTENCE_TRANSFORMERS_HOME: /cache/huggingface/sentence-transformers
+    volumes:
+      - ./recql:/app/recql
+      - ./examples:/app/examples
+      - ./docker/app/entrypoint.sh:/app/docker/app/entrypoint.sh:ro
+      - recql_hf_cache:/cache/huggingface
+    profiles: ["app", "mariadb-app", "full"]
+    stdin_open: true
+    tty: true
+
+volumes:
+  recql_pg_data:
+  recql_oracle_data:
+  recql_mariadb_data:
+  # sentence-transformers / Hugging Face model weights (shared by app-*)
+  recql_hf_cache:

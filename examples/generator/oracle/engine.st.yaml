@@ -1,0 +1,91 @@
+# Semantic demo config: MiniLM (384-d). Pair with --encode-backend sentence_transformers seed.
+
+# Application engine for the Oracle 26ai demo schema (examples/generator/oracle).
+include: retriever_queries.yaml
+version: v2
+name: recql_examples_oracle_st
+plugins:
+  backend: oracle
+  oracle:
+    encode_backend: sentence_transformers
+    text_score_label: 1
+    vector_distance: COSINE
+data:
+  item_table:
+    name: items
+    type: table
+    id_column: item_id
+    attrs_column: attrs
+    created_at_column: created_at
+    popular_rank_column: derived_popular_rank
+    search_text_column: search_text
+  user_table:
+    name: users
+    type: table
+    id_column: user_id
+    attrs_column: attrs
+  interaction_table:
+    name: interactions
+    type: table
+    user_id_column: user_id
+    item_id_column: item_id
+    label_column: label
+    created_at_column: created_at
+  filters:
+    - name: exclude_seen
+      filter_type:
+        type: personal_filter
+        user_id_column: user_id
+        item_id_column: item_id
+      filter_table:
+        type: query
+        query: SELECT item_id, user_id FROM interactions
+  schema_override:
+    item:
+      id: item_id
+      features:
+        - { name: movie_title, type: Text }
+        - { name: description, type: Text }
+        - { name: title, type: Text }
+        - { name: genre, type: Text }
+        - { name: genres, type: TextList }
+index:
+  model_store:
+    table: models
+    name_column: name
+    blob_column: blob
+    feature_spec_column: feature_spec
+    version_column: version
+  embeddings:
+    - name: content_embedding
+      dims: 384
+      encoder:
+        type: hugging_face
+        model_name: sentence-transformers/all-MiniLM-L6-v2
+    - name: title_embedding
+      dims: 384
+    - name: als
+      dims: 32
+  lexical_search:
+    enabled: true
+    backend: oracle_text
+    item_fields:
+      - title
+      - description
+training:
+  models:
+    - name: click_through_rate
+      type: lightgbm
+deployment:
+  backend: oracle
+  artifact_version: v1
+  model_versions:
+    click_through_rate: v1
+  pagination:
+    page_expiration_in_seconds: 3600
+    store:
+      table: pagination_seen
+      key_column: key
+      item_id_column: item_id
+      expires_at_column: expires_at
+      ensure_table: true

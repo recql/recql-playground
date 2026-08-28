@@ -1,0 +1,130 @@
+# Explicit Postgres retriever SQL for the MovieLens demo stack.
+# Included by examples/generator/postgres/engine.yaml and engine.st.yaml.
+# Placeholders: structural {item_from}, {emb_filter}, … ; runtime $query_vector, $limit, …
+
+plugins:
+  postgres:
+    queries:
+      entity_list: |
+        SELECT {item_select}
+        FROM {item_from} e
+
+      entity_filter: |
+        SELECT {item_select}
+        FROM {item_from} e
+        WHERE ({where})
+        LIMIT $limit
+
+      entity_column_order: |
+        SELECT {item_select}
+        FROM {item_from} e
+        WHERE ({where})
+        ORDER BY {order_by}
+        LIMIT $limit
+
+      entity_column_order_open: |
+        SELECT {item_select}
+        FROM {item_from} e
+        ORDER BY {order_by}
+        LIMIT $limit
+
+      entity_by_ids: |
+        SELECT {item_select}
+        FROM {item_from} e
+        WHERE e.{id_column} = ANY($ids::text[])
+
+      interaction_items_for_user: |
+        SELECT {item_id_column} AS item_id
+        FROM {interaction_from}
+        WHERE {user_id_column} = $entity_id
+
+      personal_filter_ids: |
+        SELECT {select_column} AS ban_id
+        FROM {filter_from}
+        WHERE {where_column} = $entity_id
+
+index:
+  lexical_search:
+    queries:
+      lexical_tsvector: |
+        SELECT {item_select},
+               ts_rank_cd(e.{search_tsv_column}, plainto_tsquery('english', $query_text)) AS score
+        FROM {item_from} e
+        WHERE e.{search_tsv_column} @@ plainto_tsquery('english', $query_text)
+        ORDER BY score DESC
+        LIMIT $limit
+
+      lexical_ilike_fallback: |
+        SELECT {item_select}, 0.1 AS score
+        FROM {item_from} e
+        WHERE CAST(to_jsonb(e) AS text) ILIKE $query_text
+        LIMIT $limit
+
+  embedding_stores:
+    content_embedding:
+      item:
+        table: text_embeddings
+        name_column: embedding_name
+        entity_id_column: entity_id
+        vector_column: embedding
+        queries:
+          embedding_vector_search: |
+            SELECT emb.{entity_id_column} AS entity_id, i.attrs,
+                   1 - (emb.{vector_column} <=> $query_vector::vector) AS score
+            FROM {emb_from} emb
+            JOIN (
+              SELECT {item_select} FROM {item_from} e
+            ) i ON i.entity_id = emb.{entity_id_column}
+            WHERE {emb_filter}
+            ORDER BY emb.{vector_column} <=> $query_vector::vector
+            LIMIT $limit
+
+    title_embedding:
+      item:
+        table: text_embeddings
+        name_column: embedding_name
+        entity_id_column: entity_id
+        vector_column: embedding
+        queries:
+          embedding_vector_search: |
+            SELECT emb.{entity_id_column} AS entity_id, i.attrs,
+                   1 - (emb.{vector_column} <=> $query_vector::vector) AS score
+            FROM {emb_from} emb
+            JOIN (
+              SELECT {item_select} FROM {item_from} e
+            ) i ON i.entity_id = emb.{entity_id_column}
+            WHERE {emb_filter}
+            ORDER BY emb.{vector_column} <=> $query_vector::vector
+            LIMIT $limit
+
+    als:
+      user:
+        table: als_user_embeddings
+        entity_id_column: user_id
+        vector_column: embedding
+        queries:
+          embedding_lookup: |
+            SELECT emb.{vector_column} AS embedding
+            FROM {emb_from} emb
+            WHERE emb.{entity_id_column} = $entity_id
+
+      item:
+        table: als_item_embeddings
+        entity_id_column: item_id
+        vector_column: embedding
+        queries:
+          embedding_lookup: |
+            SELECT emb.{vector_column} AS embedding
+            FROM {emb_from} emb
+            WHERE emb.{entity_id_column} = $entity_id
+
+          embedding_similarity_search: |
+            SELECT emb.{entity_id_column} AS entity_id, i.attrs,
+                   1 - (emb.{vector_column} <=> $query_vector) AS score
+            FROM {emb_from} emb
+            JOIN (
+              SELECT {item_select} FROM {item_from} e
+            ) i ON i.entity_id = emb.{entity_id_column}
+            WHERE TRUE
+            ORDER BY emb.{vector_column} <=> $query_vector
+            LIMIT $limit

@@ -1,0 +1,1 @@
+"""MariaDB demo generator package."""
