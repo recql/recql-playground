@@ -59,8 +59,9 @@ export RECQL_MARIADB_DSN = $(MARIADB_DSN)
 export RECQL_ORACLE_DSN = $(ORACLE_DSN)
 
 .PHONY: help menu run menu-docker run-docker menu-local run-local build build-app \
-        seed seed-docker seed-local seed-postgres seed-mssql seed-mongodb seed-mariadb seed-oracle \
-        example repl up down reset up-postgres up-mssql up-mongodb up-mariadb up-oracle
+        seed seed-docker seed-local seed-postgres seed-mssql seed-mongodb seed-mariadb seed-oracle seed-federated \
+        example example-federated example-federated-docker example-federated-local repl \
+        up down reset up-postgres up-mssql up-mongodb up-mariadb up-oracle up-federated
 
 help: ## Show targets and descriptions
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-24s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -145,9 +146,14 @@ seed-mariadb: ## Seed MariaDB database
 seed-oracle: ## Seed Oracle 23ai database
 	@$(MAKE) seed BACKEND=oracle
 
+seed-federated: ## Seed all databases used by federated engine (postgres, oracle, mariadb)
+	@$(MAKE) seed BACKEND=postgres
+	@$(MAKE) seed BACKEND=oracle
+	@$(MAKE) seed BACKEND=mariadb
+
 example: ## Run a specific example (e.g. make example EXAMPLE=search/hybrid BACKEND=postgres)
 	@if [ -z "$(EXAMPLE)" ]; then \
-	  echo "Usage: make example EXAMPLE=<name> [BACKEND=postgres|mssql|mongodb|mariadb|oracle]"; \
+	  echo "Usage: make example EXAMPLE=<name> [BACKEND=postgres|mssql|mongodb|mariadb|oracle|federated]"; \
 	  echo "Examples:"; \
 	  $(PYTHON) -m examples.run_example --list; \
 	  exit 1; \
@@ -162,6 +168,24 @@ example: ## Run a specific example (e.g. make example EXAMPLE=search/hybrid BACK
 	else \
 	  $(PYTHON) -m examples.run_example $(EXAMPLE) --backend $(BACKEND) --local $(if $(PARAM),--param $(PARAM),); \
 	fi
+
+example-federated: ## Run cross-database federated example (Docker by default, local if RECQL_USE_DOCKER=0)
+ifeq ($(RECQL_USE_DOCKER),0)
+	@$(MAKE) example-federated-local
+else
+	@$(MAKE) example-federated-docker
+endif
+
+example-federated-docker: ## Run cross-database federated example inside Docker
+	$(COMPOSE) run --rm \
+	  -e RECQL_BACKEND=federated \
+	  -e RECQL_ENCODE=$(ENCODE) \
+	  -e RECQL_DIMS=$(DIMS) \
+	  app-federated \
+	  python -m examples.run_example federated --backend federated $(if $(PARAM),--param $(PARAM),)
+
+example-federated-local: ## Run cross-database federated example on local host
+	@$(PYTHON) -m examples.run_example federated --backend federated --local $(if $(PARAM),--param $(PARAM),)
 
 repl: ## Launch interactive RecQL REPL for target backend
 	@$(PYTHON) -m recql.cli --database "$(DATABASE)" --backend $(BACKEND) --repl
@@ -181,12 +205,16 @@ up-mariadb: ## Start local MariaDB container
 up-oracle: ## Start local Oracle 23ai container
 	$(COMPOSE) up -d oracle
 
+up-federated: ## Start all database containers required for federation (postgres, oracle, mariadb)
+	$(COMPOSE) up -d postgres oracle mariadb
+
 up: ## Start database container for BACKEND
 	@if [ "$(BACKEND)" = "postgres" ]; then $(MAKE) up-postgres; \
 	elif [ "$(BACKEND)" = "mssql" ]; then $(MAKE) up-mssql; \
 	elif [ "$(BACKEND)" = "mongodb" ]; then $(MAKE) up-mongodb; \
 	elif [ "$(BACKEND)" = "mariadb" ]; then $(MAKE) up-mariadb; \
 	elif [ "$(BACKEND)" = "oracle" ]; then $(MAKE) up-oracle; \
+	elif [ "$(BACKEND)" = "federated" ]; then $(MAKE) up-federated; \
 	fi
 
 down: ## Stop all database containers

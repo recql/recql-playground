@@ -60,17 +60,18 @@ def _cli_module() -> str:
         return "recql.cli"
 
 
-def _seed_if_needed(args: argparse.Namespace, *, encode: str, backend: str) -> None:
+def _seed_backend(args: argparse.Namespace, *, encode: str, backend: str) -> None:
     seed = os.environ.get("RECQL_SEED", getattr(args, "seed", "auto"))
     if str(seed).lower() in ("0", "false", "no"):
         return
     st = encode in ("st", "sentence_transformers", "hf", "minilm")
     encode_backend = "sentence_transformers" if st else "fake"
     dims = "384" if st else os.environ.get("RECQL_DIMS", "8")
-    dsn = os.environ.get(
-        "RECQL_DATABASE",
-        _CONTAINER_DSNS.get(backend, _CONTAINER_DSNS["postgres"]),
-    )
+    env_db = os.environ.get("RECQL_DATABASE")
+    if env_db and env_db != "federated":
+        dsn = env_db
+    else:
+        dsn = _CONTAINER_DSNS.get(backend, _CONTAINER_DSNS["postgres"])
     import subprocess
 
     if str(seed).lower() != "force":
@@ -108,6 +109,14 @@ def _seed_if_needed(args: argparse.Namespace, *, encode: str, backend: str) -> N
         ],
         check=True,
     )
+
+
+def _seed_if_needed(args: argparse.Namespace, *, encode: str, backend: str) -> None:
+    if backend == "federated":
+        for b in ("postgres", "oracle", "mariadb"):
+            _seed_backend(args, encode=encode, backend=b)
+        return
+    _seed_backend(args, encode=encode, backend=backend)
 
 
 def _find_query(name: str) -> Path:
@@ -208,8 +217,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--list", action="store_true")
     p.add_argument(
         "--backend",
-        default=os.environ.get("RECQL_BACKEND", "postgres"),
-        choices=("postgres", "oracle", "mariadb", "mongodb", "mssql"),
+        default=os.environ.get("RECQL_BACKEND"),
+        choices=("postgres", "oracle", "mariadb", "mongodb", "mssql", "federated"),
     )
     p.add_argument("--encode", default=os.environ.get("RECQL_ENCODE", "st"))
     p.add_argument("--seed", default=os.environ.get("RECQL_SEED", "0"))
@@ -228,6 +237,9 @@ def main(argv: list[str] | None = None) -> int:
         help="Use local Python CLI instead of docker compose",
     )
     args = p.parse_args(argv)
+
+    if not args.backend:
+        args.backend = "federated" if args.example == "federated" else "postgres"
 
     in_container = args.in_container or _in_container()
 
@@ -268,19 +280,22 @@ def main(argv: list[str] | None = None) -> int:
             sys.executable,
             "-m",
             _cli_module(),
-            "--database",
-            os.environ.get(
-                "RECQL_DATABASE",
-                _CONTAINER_DSNS.get(args.backend, _CONTAINER_DSNS["postgres"]),
-            ),
-            "--backend",
-            args.backend,
             "--engine",
             os.environ.get("RECQL_ENGINE", container_engine),
             "--query-file",
             container_query,
             *_cli_param_args(params),
         ]
+        if args.backend != "federated":
+            cmd.extend([
+                "--database",
+                os.environ.get(
+                    "RECQL_DATABASE",
+                    _CONTAINER_DSNS.get(args.backend, _CONTAINER_DSNS["postgres"]),
+                ),
+                "--backend",
+                args.backend,
+            ])
         if args.plan:
             cmd.append("--plan")
         if args.pagination_key:
@@ -292,25 +307,28 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.local or os.environ.get("RECQL_USE_DOCKER") in ("0", "false", "no"):
-        dsn = (
-            os.environ.get("RECQL_DATABASE")
-            or _LOCAL_DSNS.get(args.backend, _LOCAL_DSNS["postgres"])
-        )
         engine = str(_EXAMPLES / "generator" / backend_dir / eng_name)
         cmd = [
             sys.executable,
             "-m",
             _cli_module(),
-            "--database",
-            dsn,
-            "--backend",
-            args.backend,
             "--engine",
             engine,
             "--query-file",
             str(query_path),
             *_cli_param_args(params),
         ]
+        if args.backend != "federated":
+            dsn = (
+                os.environ.get("RECQL_DATABASE")
+                or _LOCAL_DSNS.get(args.backend, _LOCAL_DSNS["postgres"])
+            )
+            cmd.extend([
+                "--database",
+                dsn,
+                "--backend",
+                args.backend,
+            ])
     else:
         service = f"app-{args.backend}"
         cmd = [

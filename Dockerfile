@@ -15,7 +15,7 @@ COPY docker/app ./docker/app
 # Install dependencies
 RUN pip install --no-cache-dir -U pip setuptools wheel \
  && pip install --no-cache-dir \
-      asyncpg oracledb pymysql motor pymongo pymssql lightgbm sentence-transformers pyyaml msgspec \
+      asyncpg oracledb aiomysql pymysql cryptography motor pymongo pymssql lightgbm sentence-transformers pyyaml msgspec \
  && pip install --no-cache-dir -e . --no-deps
 
 # Sibling checkouts can be mounted at runtime into /deps

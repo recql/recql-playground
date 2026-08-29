@@ -70,8 +70,35 @@ make example EXAMPLE=feeds/for_you BACKEND=postgres
 # Similar Items (Item-to-Item CF)
 make example EXAMPLE=similar_items BACKEND=mariadb
 
+# Cross-Database Federated Search (PostgreSQL + Oracle 23ai + MariaDB)
+make example-federated
+# or explicitly inside Docker:
+make example-federated-docker
+
 # List all available examples
 make example
+```
+
+---
+
+### 🌐 Cross-Database (Federated) Queries
+
+RecQL can federate across multiple databases in parallel within a single query:
+
+- **Oracle 23ai**: AI Vector Search semantic ANN retrieval (`content_embedding`)
+- **PostgreSQL**: Collaborative filtering ALS user vectors & relations
+- **MariaDB**: FullText BM25 lexical keyword matching
+- **PostgreSQL**: Interaction history filtering (`exclude_seen`) and LightGBM model scoring
+
+```bash
+# Start all database containers required for federation
+make up-federated
+
+# Seed databases
+make seed-federated
+
+# Run the federated example
+make example-federated
 ```
 
 ---

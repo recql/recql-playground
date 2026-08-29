@@ -1,0 +1,97 @@
+# Cross-Database Federated Demo Config: Fake encoder (8-d).
+# Spans PostgreSQL (primary relations & ALS), Oracle 23ai (Vector Search), and MariaDB (FullText).
+
+version: v2
+name: recql_federated_demo
+
+backends:
+  postgres_main:
+    backend: postgres
+    dsn: ${RECQL_PG_DSN:-postgres://recql:recql@postgres:5432/recql}
+    min_size: 1
+    max_size: 4
+    encode_backend: fake
+
+  oracle_vector:
+    backend: oracle
+    dsn: ${RECQL_ORACLE_DSN:-oracle://recql:RecqlPass1@oracle:1521/FREEPDB1}
+    encode_backend: fake
+
+  mariadb_lexical:
+    backend: mariadb
+    dsn: ${RECQL_MARIADB_DSN:-mariadb://recql:recql@mariadb:3306/recql}
+
+data:
+  item_table:
+    backend: postgres_main
+    name: items
+    type: table
+    id_column: item_id
+    attrs_column: attrs
+    created_at_column: created_at
+    popular_rank_column: _derived_popular_rank
+    search_tsv_column: search_tsv
+  user_table:
+    backend: postgres_main
+    name: users
+    type: table
+    id_column: user_id
+    attrs_column: attrs
+  interaction_table:
+    backend: postgres_main
+    name: interactions
+    type: table
+    user_id_column: user_id
+    item_id_column: item_id
+    label_column: label
+    created_at_column: created_at
+  filters:
+    - name: exclude_seen
+      backend: postgres_main
+      filter_type: personal_filter
+      filter_table:
+        type: query
+        query: SELECT item_id, user_id FROM interactions
+
+  schema_override:
+    item:
+      id: item_id
+      features:
+        - { name: movie_title, type: Text }
+        - { name: description, type: Text }
+        - { name: title, type: Text }
+        - { name: genre, type: Text }
+        - { name: genres, type: TextList }
+
+index:
+  model_store:
+    backend: postgres_main
+    table: models
+    name_column: name
+    blob_column: blob
+    feature_spec_column: feature_spec
+    version_column: version
+
+  embeddings:
+    - name: content_embedding
+      backend: oracle_vector
+      dims: 8
+    - name: title_embedding
+      backend: oracle_vector
+      dims: 8
+    - name: als
+      backend: postgres_main
+      dims: 8
+      encoder:
+        type: precomputed_user
+
+  lexical_search:
+    backend: mariadb_lexical
+    enabled: true
+    item_fields: [title, overview]
+
+training:
+  models:
+    - name: click_through_rate
+      backend: postgres_main
+      type: lgbm

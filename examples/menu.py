@@ -62,9 +62,20 @@ DEFAULT_BACKENDS = {
         "dsn": os.environ.get("RECQL_ORACLE_DSN", "oracle://recql:RecqlPass1@127.0.0.1:1521/FREEPDB1"),
         "container_dsn": "oracle://recql:RecqlPass1@oracle:1521/FREEPDB1",
     },
+    "federated": {
+        "name": "Federated Multi-DB (PostgreSQL + Oracle 23ai + MariaDB)",
+        "dsn": "federated",
+        "container_dsn": "federated",
+    },
 }
 
 CATEGORIES = [
+    (
+        "Cross-Database / Federated",
+        [
+            ("federated", "Federated search & ranking (PostgreSQL + Oracle + MariaDB)"),
+        ],
+    ),
     (
         "Search & Discovery",
         [
@@ -229,7 +240,7 @@ async def _run_query(
 ) -> tuple[Any, float]:
     from recql.catalog import load_engine_catalog
     from recql.harness import recql
-    from recql.plugins.connectors import open_connection
+    from recql.plugins.connectors import open_connection, open_engine
 
     engine_path = state.engine_path()
     catalog = load_engine_catalog(engine_path) if engine_path.is_file() else None
@@ -237,13 +248,20 @@ async def _run_query(
     enc = "sentence_transformers" if state.encode in ("st", "sentence_transformers") else "fake"
     dims = 384 if enc == "sentence_transformers" else state.dims
 
-    registry, closer = await open_connection(
-        state.dsn,
-        backend=state.backend,
-        catalog=catalog,
-        dims=dims,
-        encode_backend=enc,
-    )
+    if state.backend == "federated" or (catalog and catalog.is_multi_backend()):
+        registry, closer = await open_engine(
+            catalog,
+            dims=dims,
+            encode_backend=enc,
+        )
+    else:
+        registry, closer = await open_connection(
+            state.dsn,
+            backend=state.backend,
+            catalog=catalog,
+            dims=dims,
+            encode_backend=enc,
+        )
     t0 = time.perf_counter()
     try:
         res = await recql(

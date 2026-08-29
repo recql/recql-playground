@@ -239,6 +239,42 @@ services:
     stdin_open: true
     tty: true
 
+  app-federated:
+    build: .
+    image: recql-playground:local
+    depends_on:
+      postgres:
+        condition: service_healthy
+      oracle:
+        condition: service_healthy
+      mariadb:
+        condition: service_healthy
+    environment:
+      RECQL_BACKEND: federated
+      RECQL_DATABASE: federated
+      RECQL_ENGINE: /app/examples/generator/federated/engine.st.yaml
+      RECQL_SEED: ${RECQL_SEED:-auto}
+      RECQL_ENCODE: ${RECQL_ENCODE:-st}
+      RECQL_DIMS: ${RECQL_DIMS:-384}
+      HF_HOME: /cache/huggingface
+      HUGGINGFACE_HUB_CACHE: /cache/huggingface/hub
+      TRANSFORMERS_CACHE: /cache/huggingface/transformers
+      SENTENCE_TRANSFORMERS_HOME: /cache/huggingface/sentence-transformers
+    volumes:
+      - ./:/app
+      - ${RECQL_CORE_PATH:-../recql-python-core}:/deps/core:ro
+      - ${RECQL_CLI_PATH:-../recql-python-cli}:/deps/cli:ro
+      - ${RECQL_POSTGRES_PATH:-../recql-python-postgres}:/deps/postgres:ro
+      - ${RECQL_ORACLE_PATH:-../recql-python-oracle}:/deps/oracle:ro
+      - ${RECQL_MARIADB_PATH:-../recql-python-mariadb}:/deps/mariadb:ro
+      - ${RECQL_MONGODB_PATH:-../recql-python-mongodb}:/deps/mongodb:ro
+      - ${RECQL_MSSQL_PATH:-../recql-python-mssql}:/deps/mssql:ro
+      - ./docker/app/entrypoint.sh:/app/docker/app/entrypoint.sh:ro
+      - recql_hf_cache:/cache/huggingface
+    profiles: ["app", "federated-app", "full"]
+    stdin_open: true
+    tty: true
+
 volumes:
   recql_pg_data:
   recql_oracle_data:

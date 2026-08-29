@@ -21,8 +21,18 @@ async def load_catalog(
     )
 
     async with conn.cursor() as cur:
-        for it in catalog.items:
-            await cur.execute(
+        item_rows = [
+            (
+                it.item_id,
+                json.dumps(it.attrs),
+                it.created_at,
+                it.popular_rank,
+                it.search_text,
+            )
+            for it in catalog.items
+        ]
+        if item_rows:
+            await cur.executemany(
                 """
                 INSERT INTO items
                   (item_id, attrs, created_at, derived_popular_rank, search_text)
@@ -33,27 +43,28 @@ async def load_catalog(
                   derived_popular_rank = VALUES(derived_popular_rank),
                   search_text = VALUES(search_text)
                 """,
-                (
-                    it.item_id,
-                    json.dumps(it.attrs),
-                    it.created_at,
-                    it.popular_rank,
-                    it.search_text,
-                ),
+                item_rows,
             )
 
-        for u in catalog.users:
-            await cur.execute(
+        user_rows = [(u.user_id, json.dumps(u.attrs or {})) for u in catalog.users]
+        if user_rows:
+            await cur.executemany(
                 """
                 INSERT INTO users (user_id, attrs)
                 VALUES (%s, %s)
                 ON DUPLICATE KEY UPDATE attrs = VALUES(attrs)
                 """,
-                (u.user_id, json.dumps(u.attrs or {})),
+                user_rows,
             )
 
-        for inter in catalog.interactions:
-            await cur.execute(
+        inter_rows = [
+            (inter.user_id, inter.item_id, inter.label, inter.created_at)
+            for inter in catalog.interactions
+        ]
+        batch_size = 5000
+        for i in range(0, len(inter_rows), batch_size):
+            chunk = inter_rows[i : i + batch_size]
+            await cur.executemany(
                 """
                 INSERT INTO interactions (user_id, item_id, label, created_at)
                 VALUES (%s, %s, %s, COALESCE(%s, CURRENT_TIMESTAMP(6)))
@@ -61,11 +72,48 @@ async def load_catalog(
                   label = VALUES(label),
                   created_at = VALUES(created_at)
                 """,
-                (inter.user_id, inter.item_id, inter.label, inter.created_at),
+                chunk,
             )
 
+        als_user_rows = []
+        als_item_rows = []
+        text_rows = []
         for emb in catalog.embeddings:
-            await _insert_embedding(cur, emb)
+            literal = vec_literal(emb.vector)
+            if emb.embedding_name == "als" and emb.entity_type == "user":
+                als_user_rows.append((emb.entity_id, literal))
+            elif emb.embedding_name == "als" and emb.entity_type == "item":
+                als_item_rows.append((emb.entity_id, literal))
+            else:
+                text_rows.append((emb.embedding_name, emb.entity_id, literal))
+
+        if als_user_rows:
+            await cur.executemany(
+                """
+                INSERT INTO als_user_embeddings (user_id, embedding)
+                VALUES (%s, VEC_FromText(%s))
+                ON DUPLICATE KEY UPDATE embedding = VALUES(embedding)
+                """,
+                als_user_rows,
+            )
+        if als_item_rows:
+            await cur.executemany(
+                """
+                INSERT INTO als_item_embeddings (item_id, embedding)
+                VALUES (%s, VEC_FromText(%s))
+                ON DUPLICATE KEY UPDATE embedding = VALUES(embedding)
+                """,
+                als_item_rows,
+            )
+        if text_rows:
+            await cur.executemany(
+                """
+                INSERT INTO text_embeddings (embedding_name, entity_id, embedding)
+                VALUES (%s, %s, VEC_FromText(%s))
+                ON DUPLICATE KEY UPDATE embedding = VALUES(embedding)
+                """,
+                text_rows,
+            )
 
         for model in catalog.models:
             await cur.execute(

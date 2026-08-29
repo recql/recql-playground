@@ -17,6 +17,9 @@ if [[ -d "/deps/core" ]]; then
     fi
   done
 fi
+if ! python -c "import aiomysql" >/dev/null 2>&1; then
+  pip install -q aiomysql cryptography 2>/dev/null || true
+fi
 pip install -q --no-deps -e /app 2>/dev/null || true
 
 case "$ENCODE" in
@@ -70,8 +73,14 @@ case "$BACKEND" in
     ENGINE="/app/examples/generator/mssql/engine${ENGINE_SUFFIX}.yaml"
     CLI_BACKEND_ARGS=(--backend mssql)
     ;;
+  federated|multi)
+    BACKEND=federated
+    DATABASE="${RECQL_DATABASE:-federated}"
+    ENGINE="/app/examples/generator/federated/engine${ENGINE_SUFFIX}.yaml"
+    CLI_BACKEND_ARGS=()
+    ;;
   *)
-    echo "unknown RECQL_BACKEND=$BACKEND (use postgres|oracle|mariadb|mongodb|mssql)" >&2
+    echo "unknown RECQL_BACKEND=$BACKEND (use postgres|oracle|mariadb|mongodb|mssql|federated)" >&2
     exit 2
     ;;
 esac
@@ -83,7 +92,9 @@ fi
 wait_for_postgres() {
   python - <<'PY'
 import asyncio, os, sys
-dsn = os.environ.get("RECQL_DATABASE") or os.environ.get("RECQL_PG_DSN") or "postgres://recql:recql@postgres:5432/recql"
+dsn = os.environ.get("RECQL_PG_DSN") or "postgres://recql:recql@postgres:5432/recql"
+if os.environ.get("RECQL_BACKEND") == "postgres":
+    dsn = os.environ.get("RECQL_DATABASE") or dsn
 async def main():
     import asyncpg
     for i in range(60):
@@ -103,7 +114,9 @@ PY
 wait_for_oracle() {
   python - <<'PY'
 import asyncio, os, sys
-dsn = os.environ.get("RECQL_DATABASE") or os.environ.get("RECQL_ORACLE_DSN") or "oracle://recql:RecqlPass1@oracle:1521/FREEPDB1"
+dsn = os.environ.get("RECQL_ORACLE_DSN") or "oracle://recql:RecqlPass1@oracle:1521/FREEPDB1"
+if os.environ.get("RECQL_BACKEND") == "oracle":
+    dsn = os.environ.get("RECQL_DATABASE") or dsn
 async def main():
     import oracledb
     from recql_oracle.connect import parse_oracle_dsn
@@ -125,22 +138,46 @@ PY
 wait_for_mariadb() {
   python - <<'PY'
 import asyncio, os, sys
-dsn = os.environ.get("RECQL_DATABASE") or os.environ.get("RECQL_MARIADB_DSN") or "mariadb://recql:recql@mariadb:3306/recql"
+dsn = os.environ.get("RECQL_MARIADB_DSN") or "mariadb://recql:recql@mariadb:3306/recql"
+if os.environ.get("RECQL_BACKEND") == "mariadb":
+    dsn = os.environ.get("RECQL_DATABASE") or dsn
 async def main():
-    from recql_mariadb.db import create_pool
-    for i in range(60):
-        try:
-            pool = await create_pool(dsn, minsize=1, maxsize=1)
-            async with pool.acquire() as conn:
-                async with conn.cursor() as cur:
-                    await cur.execute("SELECT 1")
-            pool.close()
-            await pool.wait_closed()
-            print(f"mariadb ready ({dsn.split('@')[-1]})", flush=True)
-            return
-        except Exception as e:
-            print(f"waiting for mariadb… ({i+1}/60) {e}", flush=True)
-            await asyncio.sleep(2)
+    try:
+        from recql_mariadb.db import create_pool
+        for i in range(60):
+            try:
+                pool = await create_pool(dsn, minsize=1, maxsize=1)
+                async with pool.acquire() as conn:
+                    async with conn.cursor() as cur:
+                        await cur.execute("SELECT 1")
+                pool.close()
+                await pool.wait_closed()
+                print(f"mariadb ready ({dsn.split('@')[-1]})", flush=True)
+                return
+            except Exception as e:
+                print(f"waiting for mariadb… ({i+1}/60) {e}", flush=True)
+                await asyncio.sleep(2)
+    except ImportError:
+        import pymysql
+        from urllib.parse import urlparse
+        u = urlparse(dsn.replace("mariadb://", "mysql://"))
+        for i in range(60):
+            try:
+                conn = pymysql.connect(
+                    host=u.hostname or "127.0.0.1",
+                    port=u.port or 3306,
+                    user=u.username or "recql",
+                    password=u.password or "recql",
+                    database=u.path.lstrip("/") or "recql",
+                )
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                conn.close()
+                print(f"mariadb ready ({u.hostname}:{u.port})", flush=True)
+                return
+            except Exception as e:
+                print(f"waiting for mariadb… ({i+1}/60) {e}", flush=True)
+                await asyncio.sleep(2)
     sys.exit(1)
 asyncio.run(main())
 PY
@@ -149,7 +186,9 @@ PY
 wait_for_mongodb() {
   python - <<'PY'
 import asyncio, os, sys
-dsn = os.environ.get("RECQL_DATABASE") or os.environ.get("RECQL_MONGODB_DSN") or "mongodb://mongodb:27017/recql?directConnection=true"
+dsn = os.environ.get("RECQL_MONGODB_DSN") or "mongodb://mongodb:27017/recql?directConnection=true"
+if os.environ.get("RECQL_BACKEND") == "mongodb":
+    dsn = os.environ.get("RECQL_DATABASE") or dsn
 async def main():
     from recql_mongodb.db import create_client
     for i in range(60):
@@ -170,7 +209,9 @@ PY
 wait_for_mssql() {
   python - <<'PY'
 import asyncio, os, sys
-dsn = os.environ.get("RECQL_DATABASE") or os.environ.get("RECQL_MSSQL_DSN") or "mssql://sa:RecqlTest1234!@mssql:1433/recql"
+dsn = os.environ.get("RECQL_MSSQL_DSN") or "mssql://sa:RecqlTest1234!@mssql:1433/recql"
+if os.environ.get("RECQL_BACKEND") == "mssql":
+    dsn = os.environ.get("RECQL_DATABASE") or dsn
 async def main():
     from recql_mssql.db import create_pool
     for i in range(60):
@@ -207,23 +248,38 @@ elif [[ "$BACKEND" == "mongodb" ]]; then
   wait_for_mongodb
 elif [[ "$BACKEND" == "mssql" ]]; then
   wait_for_mssql
+elif [[ "$BACKEND" == "federated" ]]; then
+  wait_for_postgres
+  wait_for_oracle
+  wait_for_mariadb
 fi
 
 # Check if DB is already seeded
-ALREADY_SEEDED=0
-if python -m examples.generator.check_seeded --backend "$BACKEND" --database "$DATABASE" --dims "$DIMS" >/dev/null 2>&1; then
-  ALREADY_SEEDED=1
-fi
+seed_one_backend() {
+  local b="$1"
+  local dsn="$2"
+  local already_seeded=0
+  if python -m examples.generator.check_seeded --backend "$b" --database "$dsn" --dims "$DIMS" >/dev/null 2>&1; then
+    already_seeded=1
+  fi
+  if [[ "$SEED" == "force" || ( "$already_seeded" == "0" && "$SEED" != "0" && "$SEED" != "false" && "$SEED" != "no" ) ]]; then
+    echo "seeding $b (encode=$ENCODE_BACKEND, dims=$DIMS) …"
+    python -m examples.generator.run \
+      --backend "$b" \
+      --database "$dsn" \
+      --encode-backend "$ENCODE_BACKEND" \
+      --dims "$DIMS"
+  else
+    echo "database $b is already seeded (${DIMS}-d) — skipping seed"
+  fi
+}
 
-if [[ "$SEED" == "force" || ( "$ALREADY_SEEDED" == "0" && "$SEED" != "0" && "$SEED" != "false" && "$SEED" != "no" ) ]]; then
-  echo "seeding $BACKEND (encode=$ENCODE_BACKEND, dims=$DIMS) …"
-  python -m examples.generator.run \
-    --backend "$BACKEND" \
-    --database "$DATABASE" \
-    --encode-backend "$ENCODE_BACKEND" \
-    --dims "$DIMS"
+if [[ "$BACKEND" == "federated" ]]; then
+  seed_one_backend postgres "postgres://recql:recql@postgres:5432/recql"
+  seed_one_backend oracle "oracle://recql:RecqlPass1@oracle:1521/FREEPDB1"
+  seed_one_backend mariadb "mariadb://recql:recql@mariadb:3306/recql"
 else
-  echo "database $BACKEND is already seeded (${DIMS}-d) — skipping seed"
+  seed_one_backend "$BACKEND" "$DATABASE"
 fi
 
 CLI_MOD="recql_cli"
@@ -241,6 +297,12 @@ fi
 # If direct shell command given, execute directly
 if [[ "${1:-}" == "python" || "${1:-}" == "bash" || "${1:-}" == "sh" || "${1:-}" == "pytest" || "${1:-}" == "recql" ]]; then
   exec "$@"
+fi
+
+if [[ "$BACKEND" == "federated" ]]; then
+  exec python -m "$CLI_MOD" \
+    --engine "$ENGINE" \
+    "$@"
 fi
 
 exec python -m "$CLI_MOD" \
