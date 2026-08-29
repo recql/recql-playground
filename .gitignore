@@ -10,3 +10,8 @@ build/
 .mypy_cache/
 .env
 .DS_Store
+
+*.swp
+.*.swp
+*~
+.DS_Store
