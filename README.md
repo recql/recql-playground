@@ -2,6 +2,47 @@
 
 Interactive playground, demo suite, and dataset seeding for **RecQL**.
 
+## Prerequisites & Directory Structure
+
+`recql-playground` mounts and installs the sibling RecQL repositories in editable mode into the development environment/containers. To run the playground locally or with Docker, clone all the companion repositories side-by-side in the same parent directory:
+
+```bash
+mkdir recql-workspace && cd recql-workspace
+
+# Clone core engine and CLI
+git clone git@github.com:recql/recql-python-core.git
+git clone git@github.com:recql/recql-python-cli.git
+
+# Clone backend database adapters
+git clone git@github.com:recql/recql-python-postgres.git
+git clone git@github.com:recql/recql-python-oracle.git
+git clone git@github.com:recql/recql-python-mariadb.git
+git clone git@github.com:recql/recql-python-mssql.git
+git clone git@github.com:recql/recql-python-mongodb.git
+
+# Clone the playground
+git clone git@github.com:recql/recql-playground.git
+cd recql-playground
+```
+
+### Directory Layout
+
+```text
+recql-workspace/
+├── recql-playground/       # Playground runner & MovieLens demo suite (you are here)
+├── recql-python-core/       # Core AST parser, OpenAPI IR, pipeline executor & query optimizer
+├── recql-python-cli/        # CLI client and REPL
+├── recql-python-postgres/   # PostgreSQL + pgvector adapter
+├── recql-python-oracle/     # Oracle 23ai AI Vector Search adapter
+├── recql-python-mariadb/    # MariaDB 11.7+ vector & fulltext adapter
+├── recql-python-mssql/      # Microsoft SQL Server 2025 vector & fulltext adapter
+└── recql-python-mongodb/    # MongoDB 8.2+ Atlas / Community vector & text search adapter
+```
+
+*(Optional: If your directories live elsewhere, you can override their paths via environment variables: `RECQL_CORE_PATH`, `RECQL_CLI_PATH`, `RECQL_POSTGRES_PATH`, `RECQL_ORACLE_PATH`, `RECQL_MARIADB_PATH`, `RECQL_MSSQL_PATH`, `RECQL_MONGODB_PATH`)*
+
+---
+
 ## Quickstart
 
 ### 🎮 Interactive Console Explorer
