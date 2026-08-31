@@ -89,8 +89,14 @@ def ensure_ml100k(*, force: bool = False) -> Path:
     root.mkdir(parents=True, exist_ok=True)
     zip_path = root / "ml-100k.zip"
     if force or not zip_path.exists():
-        with urlopen(ML_100K_URL, timeout=120) as resp:
-            zip_path.write_bytes(resp.read())
+        import ssl
+        ctx = ssl._create_unverified_context()
+        try:
+            with urlopen(ML_100K_URL, timeout=120, context=ctx) as resp:
+                zip_path.write_bytes(resp.read())
+        except Exception:
+            with urlopen(ML_100K_URL, timeout=120) as resp:
+                zip_path.write_bytes(resp.read())
     with zipfile.ZipFile(zip_path) as zf:
         zf.extractall(root)
     if not marker.exists():

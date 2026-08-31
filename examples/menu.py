@@ -89,6 +89,7 @@ CATEGORIES = [
         "Feeds & Recommendations",
         [
             ("feeds/for_you", "For You personalized feed (ALS + CTR Model)"),
+            ("feeds/interaction_pooling", "Interaction pooling feed (recent item vector aggregation)"),
             ("feeds/trending", "Trending items feed"),
             ("feeds/popular", "Most popular items"),
             ("feeds/new", "Newest item releases"),
